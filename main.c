@@ -1,0 +1,307 @@
+/*
+ * File:   main.c
+ * Author: pablo
+ *
+ * Created on April 5, 2018, 4:20 AM
+ */
+
+// CONFIG
+#pragma config FOSC = HS        // Oscillator Selection bits (XT oscillator)
+#pragma config WDTE = OFF       // Watchdog Timer Enable bit (WDT disabled)
+#pragma config PWRTE = ON       // Power-up Timer Enable bit (PWRT disabled)
+#pragma config BOREN = ON       // Brown-out Reset Enable bit (BOR enabled)
+#pragma config LVP = OFF        // Low-Voltage (Single-Supply) In-Circuit Serial Programming Enable bit (RB3/PGM pin has PGM function; low-voltage programming enabled)
+#pragma config CPD = OFF        // Data EEPROM Memory Code Protection bit (Data EEPROM code protection off)
+#pragma config WRT = OFF        // Flash Program Memory Write Enable bits (Write protection off; all program memory may be written to by EECON control)
+#pragma config CP = OFF         // Flash Program Memory Code Protection bit (Code protection off)
+
+#include <xc.h>
+#include <stdint.h>
+
+#define _XTAL_FREQ 20000000      // Fosc  frequency for _delay()  library
+
+#include "lcd_hd44780_pic16.h"
+
+uint8_t datos[40];       // Aquí se van a guardar los 40 bits leídos del DHT11
+uint8_t temperatura;     // Aquí se va a guardar la temperatura leída
+uint8_t humedad;         // Aquí se va a guardar la humedad leída
+
+void main(void) {    
+    LCDInit(LS_NONE);
+    
+    __delay_ms(50);
+
+    LCDWriteStringXY(0,0,"DHT11 Demo");
+    LCDWriteStringXY(0,1,"By -Avinash G");
+
+    
+    /* Se hace un ciclo infinito leyendo el dispositivo DHT11 cada 50 ms.
+     */
+    while(1) {
+        /* Limpar el LCD para escribir la nueva lectura */
+        LCDClear();
+        
+        /* Leer la respuesta del DHT11. 0 significa que hubo algún error, 1 es
+         * una lectura correcta y se puede escribir al LCD.
+         */
+        if (leer_dht11()) {
+            /* La lectura fue correcta. Se escribe la temperatura y humedad
+             * relativa en el LCD.
+             */
+            escribir_humedad();
+            escribir_temperatura();
+        } else {
+            /* Hubo algún error, se escribe en el LCD "No se encontró sensor."
+             */
+            escribir_error();
+        }
+        
+        /* Esperar antes de realizar la siguiente lectura del DHT11.
+         */
+        __delay_ms(1000);
+    }
+}
+
+/* 
+ * Implementa el protocolo de lectura del dispositivo DHT11.
+ * 
+ * @returns 0 si ocurre algún error durante el proceso.
+ *          1 si se lee con éxito la respuesta del DHT11.
+ */
+int leer_dht11() {
+    /***************************************************************************
+     * 1. Enviar la señal de inicio al DHT11.
+     **************************************************************************/
+    
+    /* 
+     * Colocar un estado bajo durante al menos 18ms en el bus de datos. En este
+     * caso se utiliza el bit 0 del puerto D que se configura como salida y se
+     * mantiene en 0 por 20ms.
+     */
+    PORTDbits.RD5 = 0;
+    TRISDbits.TRISD5 = 0;           
+    __delay_ms(20); 
+   
+    /* 
+     * Colocar de nuevo un estado de alta impedancia en el bus datos, para
+     * esperar por la respuesta del DHT11.
+     */
+    TRISDbits.TRISD5 = 1;
+    
+    
+    /***************************************************************************
+     * 2. Detectar respuesta del DHT11. El DHT11 envia la respuesta colocando un
+     * estado bajo en el bus de datos por un espacio de 80us, seguido de un 
+     * estado alto por otros 80 us.
+     **************************************************************************/
+    
+    /*
+     * El DHT11 puede tomar entre 20 y 40us para enviar la señal de respuesta. 
+     * Durante este tiempo el circuito de polorización mantiene en estado alto 
+     * el bus de datos. Si se supera el tiempo de espera, entonces ser retorna
+     * con error.
+     */    
+
+    /* No se usa preescalamiento del temporizador */
+    T1CKPS0 = 0;
+    T1CKPS1 = 0;
+    
+    /* Iniciar el temporizador */
+    TMR1L = 0x00;
+    TMR1H = 0x00;    
+    TMR1ON = 1;
+    
+    while(PORTDbits.RD5);
+    
+    TMR1ON = 0;
+            
+    uint16_t time = TMR1L;
+    time = time | (TMR1H << 8);
+    
+    /* 
+     * Sin preescalar el temporizador, el tiempo del tick a 20Mhz es:
+     * 
+     * 4/20E6 = 0.2us.
+     * 
+     * El retardo máximo es de 40us, de modo que el conteo máximo del temporizador
+     * es:
+     * 
+     * 40uS/0.2us = 200
+     */
+    if (time > 200) {
+        return 0;
+    }
+        
+    /*
+     * El DHT11 ha iniciado la señal de respuesta. En este punto el DHT11 debe
+     * mantener el bus de datos en estado bajo durante 80us
+     */
+    TMR1L = 0x00;
+    TMR1H = 0x00;    
+    TMR1ON = 1;
+    
+    while(!PORTDbits.RD5);
+    
+    TMR1ON = 0;
+            
+    time = TMR1L;
+    time = time | (TMR1H << 8);
+
+    /* 
+     * El retardo máximo es de 80us, de modo que el conteo máximo del temporizador
+     * es:
+     * 
+     * 80uS/0.2us = 400
+     */
+    if(time > 400) {
+        return 0;
+    }
+    
+    /*
+     * El DHT ha completado la primera parte de la señal de respuesta. En este
+     * punto debe mantener el bus de datos en estado alto durante 80us
+     */
+    TMR1L = 0x00;
+    TMR1H = 0x00;    
+    TMR1ON = 1;
+    
+    while(PORTDbits.RD5);
+    
+    TMR1ON = 0;
+            
+    time = TMR1L;
+    time = time | (TMR1H << 8);
+
+    /* 
+     * El retardo máximo es de 80us, de modo que el conteo máximo del temporizador
+     * es:
+     * 
+     * 80uS/0.2us = 400
+     */
+    if(time > 400) {
+        return 0;
+    }
+
+    
+    /***************************************************************************
+     * 3. El DHT comienza el envio de los datos de temperatura y humedad. Se han
+     * de recibir 40 bits de información en el siguiente formato:
+     * 8 bits parte entera HR
+     * 8 bits parte decimal HR
+     * 8 bits parte entera T
+     * 8 bits parte decimal T
+     * 8 bits suma de chequeo de los 4 bytes anteriores
+     * 
+     * El DHT 11 envía primero los bits más significativos
+     **************************************************************************/
+    
+    /*
+     * El siguiente ciclo va a leer los 40 bits del bus de datos, de acuerdo al
+     * protocolo del DHT11.
+     * 
+     * 1. Coloca el bus de datos en estado bajo por 50us indicando que se va a
+     *    transmitir un bit
+     * 2. Coloca el bus de datos en estado alto por 26-28us para indicar que el 
+     *    bit es "0"
+     * 3. Coloca el bus de datos en estado alto por 70us para indicar que el bit
+     *    es "1"
+     */
+    for (uint8_t i = 0; i < 40; i++) {
+        /*
+         * De acuerdo al protocolo, el DHT debe mantener en estado bajo el bus
+         * de datos por 50us, de modo que simplemente se espera que se presente
+         * el flanco de subida, pues en este punto se sabe que el DHT11 está
+         * funcionando correctamente.
+         */
+        while(!PORTDbits.RD5);
+        
+        /*
+         * Ahora se espera por el flanco de bajada y se contabiliza el tiempo
+         * que permanece en estado alto el bus de datos
+         */
+        TMR1L = 0x00;
+        TMR1H = 0x00;    
+        TMR1ON = 1;
+
+        while(PORTDbits.RD5);
+
+        TMR1ON = 0;
+
+        time = TMR1L;
+        time = time | (TMR1H << 8);
+        
+        /*
+         * Se determina si el bit fue un "0" cuando el conteo del temporizador 
+         * se halla entre 26-28us:
+         * 
+         * 26us/0.2us = 130
+         * 28us/0.2us = 140
+         * 
+         * Se determna si el bit fue un "1" cuando el conteo del temporizador
+         * es mayor o igual a 70us:
+         * 
+         * 70us/0.2us = 350
+         */
+        if (130 < time && time < 140) {
+            /* 
+             * Se ha recibido un 0 dado que el conteo de microsegundos está en
+             * el intervalo 26-28us
+             */
+            datos[i] = 0;
+        } else if (time >= 350) {
+            /* 
+             * Se ha recibido un 1 dado que el conteo de microsegundos es de 
+             * 70us
+             */
+            datos[i] = 1;
+        }
+    }
+    
+    return 1;
+}
+
+/*
+ * Escribe en el LCD el valor de humedad que se ha leído del DHT11.
+ */
+int escribir_humedad() {
+    /* 
+     * EL primer byte  de la variable datos corresponde a la parte entera de la 
+     * humedad relativa.
+     */
+    uint8_t hr = 0;
+    
+    for(uint8_t i = 0; i < 8; i++) {
+        if(1 == datos[i]) {
+            hr |= (1 << (7 - i));
+        }
+    }
+    
+    LCDWriteStringXY(0, 0, "H.R.:    % ");
+    LCDWriteIntXY(6, 0, hr, -1);
+            
+    return 1;
+}
+
+int escribir_temperatura() {
+    /* 
+     * El tercer byte de la variable datos corresponde a la parte entera de la 
+     * temperatura.
+     */
+    uint8_t hr = 0;
+    
+    for(uint8_t i = 0; i < 8; i++) {
+        if(1 == datos[i + 16]) {
+            hr |= (1 << (7 - i));
+        }
+    }
+    
+    LCDWriteStringXY(0, 1, "Temp:    %0C");
+    LCDWriteIntXY(6, 1, hr, -1);
+            
+    return 1;
+}
+
+int escribir_error() {
+    LCDWriteStringXY(0, 0, "No se encontró sensor.")
+    return 1 ;
+}
