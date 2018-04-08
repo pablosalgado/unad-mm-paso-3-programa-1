@@ -22,43 +22,51 @@
 
 #include "lcd_hd44780_pic16.h"
 
-uint8_t datos[40];       // Aquí se van a guardar los 40 bits leídos del DHT11
-uint8_t temperatura;     // Aquí se va a guardar la temperatura leída
-uint8_t humedad;         // Aquí se va a guardar la humedad leída
+uint8_t datos[40];       // Aquí se van a guardar los 40 bits leídos del DHT11.
+uint8_t temperatura;     // Aquí se va a guardar la temperatura leída.
+uint8_t humedad;         // Aquí se va a guardar la humedad leída.
+uint8_t alarma_t;        // Indica que se han superado los 30 grados de temp.
+uint8_t alarma_h;        // Indica que se han superado el 60% de humedad.
 
-void main(void) {    
+void main(void) {  
+    SSPCONbits.SSPEN = 0; // Desahabilitar I2C
+    CMCON = 0x07;         // Desahabilitar comparadores
+    ADCON1 = 0x06;        // Deshabilitar AD conversion
+    TRISC = 0x00;
+
+    /* Iniciar la subrutina del LCD*/
     LCDInit(LS_NONE);
     
     __delay_ms(50);
-
-    LCDWriteStringXY(0,0,"DHT11 Demo");
-    LCDWriteStringXY(0,1,"By -Avinash G");
-
     
-    /* Se hace un ciclo infinito leyendo el dispositivo DHT11 cada 50 ms.
-     */
+    /* Se hace un ciclo infinito leyendo el dispositivo DHT11 cada 50 ms.*/
     while(1) {
-        /* Limpar el LCD para escribir la nueva lectura */
+        /* Limpiar el LCD para escribir la nueva lectura */
         LCDClear();
         
-        /* Leer la respuesta del DHT11. 0 significa que hubo algún error, 1 es
+        /* 
+         * Leer la respuesta del DHT11. 0 significa que hubo algún error, 1 es
          * una lectura correcta y se puede escribir al LCD.
          */
         if (leer_dht11()) {
-            /* La lectura fue correcta. Se escribe la temperatura y humedad
+            /* 
+             * La lectura fue correcta. Se escribe la temperatura y humedad
              * relativa en el LCD.
              */
             escribir_humedad();
             escribir_temperatura();
+            
+            /* Se activan las alarmas y se encienden/apagan los motores.*/
+            controlar_actuadores();
         } else {
-            /* Hubo algún error, se escribe en el LCD "No se encontró sensor."
+            /* 
+             * Hubo algún error, se escribe en el LCD "No se encontró sensor."
              */
             escribir_error();
         }
         
-        /* Esperar antes de realizar la siguiente lectura del DHT11.
-         */
-        __delay_ms(1000);
+        /* Esperar antes de realizar la siguiente lectura del DHT11.*/
+        __delay_ms(50);
     }
 }
 
@@ -119,12 +127,13 @@ int leer_dht11() {
     time = time | (TMR1H << 8);
     
     /* 
-     * Sin preescalar el temporizador, el tiempo del tick a 20Mhz es:
+     * Como no se hace preescalamiento del temporizador, el tiempo del tick a 
+     * 20Mhz es:
      * 
      * 4/20E6 = 0.2us.
      * 
-     * El retardo máximo es de 40us, de modo que el conteo máximo del temporizador
-     * es:
+     * El tiempo máximo para que el DHT11 respondea es de 40us, de modo que el 
+     * conteo máximo del temporizador debe ser:
      * 
      * 40uS/0.2us = 200
      */
@@ -134,7 +143,7 @@ int leer_dht11() {
         
     /*
      * El DHT11 ha iniciado la señal de respuesta. En este punto el DHT11 debe
-     * mantener el bus de datos en estado bajo durante 80us
+     * mantener el bus de datos en estado bajo durante 80us.
      */
     TMR1L = 0x00;
     TMR1H = 0x00;    
@@ -148,8 +157,8 @@ int leer_dht11() {
     time = time | (TMR1H << 8);
 
     /* 
-     * El retardo máximo es de 80us, de modo que el conteo máximo del temporizador
-     * es:
+     * El bus debe permanecer en estado bajo por parte del DHT11 debe durar 80us, 
+     * de modo que el conteo máximo del temporizador debe ser:
      * 
      * 80uS/0.2us = 400
      */
@@ -173,8 +182,7 @@ int leer_dht11() {
     time = time | (TMR1H << 8);
 
     /* 
-     * El retardo máximo es de 80us, de modo que el conteo máximo del temporizador
-     * es:
+     * El conteo máximo del temporizador debe ser:
      * 
      * 80uS/0.2us = 400
      */
@@ -186,13 +194,14 @@ int leer_dht11() {
     /***************************************************************************
      * 3. El DHT comienza el envio de los datos de temperatura y humedad. Se han
      * de recibir 40 bits de información en el siguiente formato:
+     * 
      * 8 bits parte entera HR
      * 8 bits parte decimal HR
      * 8 bits parte entera T
      * 8 bits parte decimal T
      * 8 bits suma de chequeo de los 4 bytes anteriores
      * 
-     * El DHT 11 envía primero los bits más significativos
+     * El DHT 11 envía primero los bits más significativos.
      **************************************************************************/
     
     /*
@@ -231,14 +240,14 @@ int leer_dht11() {
         time = time | (TMR1H << 8);
         
         /*
-         * Se determina si el bit fue un "0" cuando el conteo del temporizador 
-         * se halla entre 26-28us:
+         * Se determina que el bit fue un "0" si el conteo del temporizador  se 
+         * halla entre 26-28us:
          * 
          * 26us/0.2us = 130
          * 28us/0.2us = 140
          * 
-         * Se determna si el bit fue un "1" cuando el conteo del temporizador
-         * es mayor o igual a 70us:
+         * Se determna que el bit fue un "1" si el conteo del temporizador es 
+         * mayor o igual a 70us:
          * 
          * 70us/0.2us = 350
          */
@@ -257,47 +266,120 @@ int leer_dht11() {
         }
     }
     
+    /* 
+     * EL primer byte  de la variable datos corresponde a la parte entera de la 
+     * humedad relativa.
+     */
+    humedad = 0;
+    
+    for(uint8_t i = 0; i < 8; i++) {
+        if(1 == datos[i]) {
+            humedad |= (1 << (7 - i));
+        }
+    }
+
+    /* 
+     * El tercer byte de la variable datos corresponde a la parte entera de la 
+     * temperatura.
+     */
+    temperatura = 0;
+    
+    for(uint8_t i = 0; i < 8; i++) {
+        if(1 == datos[i + 16]) {
+            temperatura |= (1 << (7 - i));
+        }
+    }
+
     return 1;
 }
 
 /*
  * Escribe en el LCD el valor de humedad que se ha leído del DHT11.
  */
-int escribir_humedad() {
-    /* 
-     * EL primer byte  de la variable datos corresponde a la parte entera de la 
-     * humedad relativa.
-     */
-    uint8_t hr = 0;
-    
-    for(uint8_t i = 0; i < 8; i++) {
-        if(1 == datos[i]) {
-            hr |= (1 << (7 - i));
-        }
-    }
-    
+int escribir_humedad() {    
     LCDWriteStringXY(0, 0, "H.R.:    % ");
-    LCDWriteIntXY(6, 0, hr, -1);
+    LCDWriteIntXY(6, 0, humedad, -1);
             
     return 1;
 }
 
-int escribir_temperatura() {
-    /* 
-     * El tercer byte de la variable datos corresponde a la parte entera de la 
-     * temperatura.
-     */
-    uint8_t hr = 0;
+int escribir_temperatura() {   
+    LCDWriteStringXY(0, 1, "Temp:    %0C");
+    LCDWriteIntXY(6, 1, temperatura, -1);
+            
+    return 1;
+}
+
+/* 
+ * El puerto C controla los actuadores de acuerdo a la siguiente configuración
+ * 
+ * bit RC0 -> LED VERDE
+ * bit RC1 -> LED AMARILLO
+ * bit RC2 -> LED ROJO
+ * bit RC4 -> Motor ventilador de temperatura
+ * bit RC5 -> Motor ventilador de humedad
+ */
+int controlar_actuadores() {
+    /* El byte de control a escribir en el puerto C */
+    uint8_t salida = 0x00;
     
-    for(uint8_t i = 0; i < 8; i++) {
-        if(1 == datos[i + 16]) {
-            hr |= (1 << (7 - i));
-        }
+    /* Si la temperatura es menor a 17 grados se enciende el led verde */
+     if (temperatura <= 15) {
+         salida |= 0x01;
+     }
+    
+    /* Si la temperatura está entre los 20 y 28 grados se enciende el led amarillo*/
+    if (19 < temperatura && temperatura < 29) {
+        salida |= 0x02;
     }
     
-    LCDWriteStringXY(0, 1, "Temp:    %0C");
-    LCDWriteIntXY(6, 1, hr, -1);
-            
+    /*
+     * Si la temperatura alcanza 30 grados se enciende el led rojo y se activa
+     * la alarma_t permanente que solo se desactiva al bajar la temperatura a 20
+     * grados
+     */
+    if (temperatura > 29) {
+        salida |= 0x04;
+        alarma_t = 1;
+    }
+    
+    /* 
+     * Mientras la temperatura sea mayor de 20 grados se mantiene activa la
+     * alarma.
+     */
+    if (temperatura < 20) {
+        alarma_t = 0;
+    }
+    
+    /* 
+     * El motor de ventilación de temperatura se mantiene encendido mientras la 
+     * alarma este acitva.
+     */
+    if (alarma_t) {
+        salida |= 0x08;        
+    }
+    
+    /* 
+     * Si la humedad relativa alcanza el 60% se activa la alarma de humedad y se 
+     * enciende el motor de ventilación de humedad.
+     */
+    if (humedad > 59) {
+        salida |= 0x10;
+        alarma_h = 1;        
+    }
+    
+    /* 
+     * Se mantiene encendido el motor de ventilación de humedad mientras la 
+     * humedad sea superior al 50%
+     */
+    if (humedad < 50) {
+        alarma_h = 0;
+    } else if (alarma_h) {
+        salida |= 0x10;
+    }
+
+    PORTC = salida;
+    
     return 1;
 }
 
