@@ -1,6 +1,6 @@
 /*
  * File:   main.c
- * Author: pablo
+ * Author: Pablo Salgado
  *
  * Created on April 5, 2018, 4:20 AM
  */
@@ -33,10 +33,10 @@ void main(void) {
     CMCON = 0x07;         // Desahabilitar comparadores
     ADCON1 = 0x06;        // Deshabilitar AD conversion
     TRISC = 0x00;
-
+    
     /* Iniciar la subrutina del LCD*/
     LCDInit(LS_NONE);
-    
+
     __delay_ms(50);
     
     /* Se hace un ciclo infinito leyendo el dispositivo DHT11 cada 50 ms.*/
@@ -66,7 +66,7 @@ void main(void) {
         }
         
         /* Esperar antes de realizar la siguiente lectura del DHT11.*/
-        __delay_ms(50);
+        __delay_ms(2000);
     }
 }
 
@@ -110,7 +110,7 @@ int leer_dht11() {
      * con error.
      */    
 
-    /* No se usa preescalamiento del temporizador */
+    /* Sin preescalamiento del temporizador */
     T1CKPS0 = 0;
     T1CKPS1 = 0;
     
@@ -119,10 +119,13 @@ int leer_dht11() {
     TMR1H = 0x00;    
     TMR1ON = 1;
     
+    /* Se lee el puerto hasta que se detecte un 0 */
     while(PORTDbits.RD5);
     
+    /* Se detiene el temporizador */
     TMR1ON = 0;
-            
+    
+    /* Se determina el conteo que ha hecho el temporizador */        
     uint16_t time = TMR1L;
     time = time | (TMR1H << 8);
     
@@ -132,7 +135,7 @@ int leer_dht11() {
      * 
      * 4/20E6 = 0.2us.
      * 
-     * El tiempo máximo para que el DHT11 respondea es de 40us, de modo que el 
+     * El tiempo máximo para que el DHT11 responda es de 40us, de modo que el 
      * conteo máximo del temporizador debe ser:
      * 
      * 40uS/0.2us = 200
@@ -162,7 +165,7 @@ int leer_dht11() {
      * 
      * 80uS/0.2us = 400
      */
-    if(time > 400) {
+    if(time > 500) {
         return 0;
     }
     
@@ -186,10 +189,9 @@ int leer_dht11() {
      * 
      * 80uS/0.2us = 400
      */
-    if(time > 400) {
+    if(time > 500) {
         return 0;
     }
-
     
     /***************************************************************************
      * 3. El DHT comienza el envio de los datos de temperatura y humedad. Se han
@@ -223,7 +225,7 @@ int leer_dht11() {
          * funcionando correctamente.
          */
         while(!PORTDbits.RD5);
-        
+
         /*
          * Ahora se espera por el flanco de bajada y se contabiliza el tiempo
          * que permanece en estado alto el bus de datos
@@ -251,13 +253,13 @@ int leer_dht11() {
          * 
          * 70us/0.2us = 350
          */
-        if (130 < time && time < 140) {
+        if (time < 250) {
             /* 
              * Se ha recibido un 0 dado que el conteo de microsegundos está en
              * el intervalo 26-28us
              */
             datos[i] = 0;
-        } else if (time >= 350) {
+        } else {
             /* 
              * Se ha recibido un 1 dado que el conteo de microsegundos es de 
              * 70us
@@ -303,6 +305,9 @@ int escribir_humedad() {
     return 1;
 }
 
+/*
+ * Escribe en el LCD el valor de temperatura que se ha leído del DHT11.
+ */
 int escribir_temperatura() {   
     LCDWriteStringXY(0, 1, "Temp:    %0C");
     LCDWriteIntXY(6, 1, temperatura, -1);
@@ -311,13 +316,15 @@ int escribir_temperatura() {
 }
 
 /* 
- * El puerto C controla los actuadores de acuerdo a la siguiente configuración
+ * Controla los actuadores conectados al puerto C de acuerdo a la Tabla 1.
  * 
- * bit RC0 -> LED VERDE
- * bit RC1 -> LED AMARILLO
- * bit RC2 -> LED ROJO
- * bit RC4 -> Motor ventilador de temperatura
- * bit RC5 -> Motor ventilador de humedad
+ * RC0		LED verde encendido mientras T <= 15o.
+ * RC1		LED amarillo encendido mientras 20o<= T <= 28o
+ * RC2		LED rojo encendido mientras T >= 30o
+ * RC3		Motor de temperatura. Enciende cuando T >= 30o y se mantiene así 
+ * hasta que T <= 20o
+ * RC4		Motor de humedad. Enciende cuando HR >= 60% y se mantiene así hasta 
+ * que HR <= 50%
  */
 int controlar_actuadores() {
     /* El byte de control a escribir en el puerto C */
@@ -383,7 +390,11 @@ int controlar_actuadores() {
     return 1;
 }
 
+/*
+ * Escribe en el LCD "No se encuentra sensor", si no es posible la lectura del 
+ * DHT11
+ */
 int escribir_error() {
-    LCDWriteStringXY(0, 0, "No se encontró sensor.")
+    LCDWriteStringXY(0, 0, "No se encuentra sensor.")
     return 1 ;
 }
